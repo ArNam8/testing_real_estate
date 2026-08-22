@@ -1,0 +1,392 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  html {
+    -webkit-overflow-scrolling: touch;
+    overflow-x: hidden;
+  }
+
+  body {
+    @apply font-sans antialiased;
+    background: #F5F4F0;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+    line-height: 1.6;
+    overflow-x: hidden;
+    width: 100%;
+  }
+
+  h1, h2, h3, h4, h5, h6 { @apply font-semibold tracking-tight; }
+  h1 { @apply text-2xl; }
+  h2 { @apply text-xl; }
+  h3 { @apply text-lg; }
+
+  ::selection { @apply bg-blue-100 text-blue-900; }
+  ::-webkit-scrollbar { @apply w-2; }
+  ::-webkit-scrollbar-track { background: #ede9e3; }
+  ::-webkit-scrollbar-thumb { @apply bg-slate-300 rounded; }
+}
+
+@layer components {
+  /* ─── Buttons ──────────────────────────────────────── */
+
+  .btn-primary {
+    @apply relative px-5 py-3 rounded-2xl text-sm font-semibold text-white
+      transition-all duration-200 select-none
+      active:scale-95 active:shadow-inner
+      disabled:opacity-50 disabled:pointer-events-none
+      hover:shadow-md
+      flex items-center justify-center gap-2.5;
+    background: linear-gradient(135deg, #1e3a5f 0%, #0f2740 100%);
+    min-height: 48px;
+    box-shadow: 0 2px 8px rgba(30, 58, 95, 0.15);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 4px 16px rgba(30, 58, 95, 0.25);
+  }
+
+  .btn-secondary {
+    @apply px-5 py-3 rounded-2xl text-sm font-semibold
+      border-2 border-slate-200 text-slate-700
+      transition-all duration-200 select-none
+      active:scale-95 active:bg-slate-50
+      hover:border-slate-300 hover:bg-slate-50
+      bg-white
+      flex items-center justify-center gap-2.5;
+    min-height: 48px;
+  }
+
+  .btn-ghost {
+    @apply px-4 py-2.5 rounded-xl text-sm font-medium text-slate-600
+      transition-all duration-150 select-none
+      active:scale-95 hover:text-slate-800 hover:bg-slate-100
+      flex items-center justify-center gap-2;
+    min-height: 44px;
+  }
+
+  .btn-danger {
+    @apply px-5 py-3 rounded-2xl text-sm font-semibold text-white
+      transition-all duration-200 select-none active:scale-95
+      disabled:opacity-50 hover:shadow-md
+      flex items-center justify-center gap-2.5;
+    background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+    min-height: 48px;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.15);
+  }
+
+  /* ─── Cards ────────────────────────────────────────── */
+
+  .card {
+    @apply rounded-2xl border bg-white transition-all duration-200;
+    border-color: rgba(226, 220, 210, 0.8);
+    box-shadow: 0 1px 4px rgba(30, 20, 10, 0.06), 0 0 0 0.5px rgba(30, 20, 10, 0.04);
+  }
+
+  .card:hover {
+    border-color: rgba(200, 194, 182, 0.9);
+    box-shadow: 0 4px 14px rgba(30, 20, 10, 0.10);
+  }
+
+  .card-interactive {
+    @apply card active:bg-slate-50 cursor-pointer;
+    transition: all 200ms cubic-bezier(0.2, 0, 0.2, 1);
+  }
+
+  .card-interactive:active {
+    transform: scale(0.98);
+  }
+
+  /* ─── Inputs ────────────────────────────────────────── */
+
+  .input-field {
+    @apply w-full bg-white border-2 border-slate-200 rounded-2xl px-4 py-3.5
+      text-base text-slate-900 placeholder:text-slate-400
+      transition-all duration-200
+      focus:outline-none focus:ring-2 focus:border-[#1e3a5f];
+    --tw-ring-color: rgba(30, 58, 95, 0.15);
+    min-height: 48px;
+  }
+
+  .label {
+    @apply block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2;
+  }
+
+  /* ─── Badges ────────────────────────────────────────── */
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+      bg-slate-100 text-slate-700;
+  }
+  .badge-success  { @apply bg-teal-50 text-teal-700; }
+  .badge-warning  { @apply bg-amber-50 text-amber-700; }
+  .badge-error    { @apply bg-red-50 text-red-700; }
+  .badge-processing { @apply bg-blue-50 text-blue-700; }
+
+  /* ─── Layout ────────────────────────────────────────── */
+
+  .page-content {
+    @apply w-full max-w-2xl mx-auto px-5;
+    padding-bottom: calc(120px + env(safe-area-inset-bottom));
+  }
+
+  .top-bar {
+    @apply fixed top-0 left-0 right-0 z-50;
+    background: rgba(248, 246, 242, 0.96);
+    border-bottom: 1px solid rgba(226, 220, 210, 0.8);
+    padding-top: env(safe-area-inset-top);
+    height: calc(56px + env(safe-area-inset-top));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  }
+
+  .top-bar-inner {
+    @apply flex items-center justify-between px-5 gap-4;
+    height: 56px;
+  }
+
+  .progress-bar-bottom {
+    @apply fixed bottom-0 left-0 right-0 z-40;
+    background: rgba(248, 246, 242, 0.97);
+    border-top: 1px solid rgba(226, 220, 210, 0.8);
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+  }
+
+  .section-title {
+    @apply text-xs font-bold text-slate-400 uppercase tracking-wider mb-4;
+  }
+
+  .divider {
+    @apply h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent;
+  }
+}
+
+@layer utilities {
+  /* Animation utilities */
+  .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+  .animate-slide-up { animation: slideUp 0.4s cubic-bezier(0.34, 1.3, 0.64, 1) forwards; }
+  .animate-slide-down { animation: slideDown 0.3s ease-out forwards; }
+  .animate-scale-in { animation: scaleIn 0.3s cubic-bezier(0.34, 1.3, 0.64, 1) forwards; }
+  .animate-scale-out { animation: scaleOut 0.2s cubic-bezier(0.4, 0, 1, 1) forwards; }
+  .animate-app-enter { animation: appEnter 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+  /* ── In-app .docx viewer (mammoth HTML output) ─────────────────────────── */
+  .doc-viewer-body {
+    font-family: 'Calibri', 'Inter', sans-serif;
+    color: #1A2E45;
+    line-height: 1.65;
+    font-size: 14px;
+    padding: 8px 0;
+  }
+
+  /* Mammoth renders Word headings as h1-h6 */
+  .doc-viewer-body h1,
+  .doc-viewer-body h2,
+  .doc-viewer-body h3 {
+    color: var(--brand-primary, #0F2740);
+    font-weight: 700;
+    margin-top: 1.4em;
+    margin-bottom: 0.4em;
+    line-height: 1.3;
+  }
+  .doc-viewer-body h1 { font-size: 1.25rem; border-bottom: 2px solid var(--brand-secondary, #6FAF9A); padding-bottom: 6px; }
+  .doc-viewer-body h2 { font-size: 1.05rem; color: var(--brand-primary, #0F2740); }
+  .doc-viewer-body h3 { font-size: 0.95rem; color: #1A2E45; }
+
+  .doc-viewer-body p {
+    margin-bottom: 0.55em;
+    font-size: 0.9rem;
+  }
+
+  .doc-viewer-body strong {
+    font-weight: 600;
+    color: #1A2E45;
+  }
+
+  .doc-viewer-body em {
+    color: #6B7280;
+    font-style: italic;
+  }
+
+  /* Tables from the fact grid */
+  .doc-viewer-body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.875rem;
+  }
+  .doc-viewer-body td,
+  .doc-viewer-body th {
+    padding: 8px 12px;
+    border: 1px solid #E8E4DE;
+    vertical-align: top;
+  }
+  .doc-viewer-body tr:nth-child(even) td {
+    background: #F5F4F0;
+  }
+
+  /* Bullet lists */
+  .doc-viewer-body ul,
+  .doc-viewer-body ol {
+    padding-left: 1.4em;
+    margin-bottom: 0.6em;
+  }
+  .doc-viewer-body li {
+    margin-bottom: 0.25em;
+    font-size: 0.9rem;
+  }
+
+  /* Condition/status chips — mammoth preserves the named character style as
+     a class (see DocViewer.tsx styleMap); colour + shape are defined here
+     since mammoth strips the docx's own inline shading. */
+  .doc-viewer-body .chip-good,
+  .doc-viewer-body .chip-fair,
+  .doc-viewer-body .chip-attention,
+  .doc-viewer-body .chip-pending {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .doc-viewer-body .chip-good      { background: var(--brand-secondary-tint-bg, #E3F2EC); color: var(--brand-secondary-tint-fg, #1F7A52); }
+  .doc-viewer-body .chip-fair      { background: #FDF1DF; color: #9A6A1E; }
+  .doc-viewer-body .chip-attention { background: #FBE7E7; color: #B23B3B; }
+  .doc-viewer-body .chip-pending   { background: #EFEDE7; color: #6B7280; }
+
+  /* Milestone tracker status dots */
+  .doc-viewer-body .dot-complete { color: var(--brand-secondary, #6FAF9A); font-weight: 700; }
+  .doc-viewer-body .dot-pending  { color: #6B7280; font-weight: 700; }
+
+  /* Section headings (docBuilder's sectionHeader()) */
+  .doc-viewer-body p.section-heading {
+    color: var(--brand-primary, #0F2740);
+    font-weight: 700;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 2px solid var(--brand-secondary, #6FAF9A);
+    padding-bottom: 6px;
+    margin-top: 1.4em;
+    margin-bottom: 0.5em;
+  }
+
+  /* Document modal — backdrop fades in while panel rises and scales up */
+  .animate-doc-backdrop { animation: docBackdrop 0.22s ease-out forwards; }
+  .animate-doc-panel    { animation: docPanel    0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes scaleOut {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.95); }
+  }
+
+  @keyframes docBackdrop {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes docPanel {
+    from { opacity: 0; transform: scale(0.94) translateY(12px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0); }
+  }
+
+  /* Transition from landing page into the authenticated app — a gentle
+     fade-in "arrival" feel. Deliberately avoids `transform` here: a
+     transform on this root wrapper would create a new containing block
+     for any `position: fixed` descendants (e.g. modal overlays), breaking
+     their fixed positioning relative to the viewport. */
+  @keyframes appEnter {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes waveBar {
+    0%, 100% { transform: scaleY(0.1); opacity: 0.25; }
+    50% { transform: scaleY(1); opacity: 1; }
+  }
+
+  @keyframes pulseRing {
+    0% { transform: scale(0.95); opacity: 0.6; }
+    70% { transform: scale(1.5); opacity: 0; }
+    100% { transform: scale(0.95); opacity: 0; }
+  }
+
+  @keyframes recordDot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -1000px 0; }
+    100% { background-position: 1000px 0; }
+  }
+
+  /* Animation classes */
+  .animate-record-dot { animation: recordDot 1.2s ease-in-out infinite; }
+  .animate-pulse-ring { animation: pulseRing 2s ease-out infinite; }
+  .animate-shimmer {
+    background: linear-gradient(90deg, #edeae4 25%, #f5f3ef 50%, #edeae4 75%);
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite;
+  }
+
+  /* Warm surface — slightly tinted card for hero/featured areas */
+  .surface-warm {
+    background: rgba(255, 253, 249, 0.9);
+    border: 1px solid rgba(226, 220, 210, 0.6);
+  }
+
+  /* Mic button glow */
+  .mic-glow {
+    box-shadow: 0 0 0 0 rgba(30, 58, 95, 0.4);
+    animation: micGlow 2.4s ease-out infinite;
+  }
+
+  @keyframes micGlow {
+    0%   { box-shadow: 0 0 0 0   rgba(30, 58, 95, 0.35); }
+    60%  { box-shadow: 0 0 0 18px rgba(30, 58, 95, 0);   }
+    100% { box-shadow: 0 0 0 0   rgba(30, 58, 95, 0);    }
+  }
+
+  /* Layout helpers */
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+  .pt-safe { padding-top: env(safe-area-inset-top); }
+  .mt-topbar { margin-top: calc(56px + env(safe-area-inset-top)); }
+
+  /* Text utilities */
+  .text-balance { text-wrap: balance; }
+  .truncate-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
