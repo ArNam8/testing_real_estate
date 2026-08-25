@@ -49,6 +49,7 @@ import {
 } from "../_shared/extraction.ts";
 import { buildGenerationPrompt } from "../_shared/generation.ts";
 import { buildDocx, type RoomPhotoMap } from "../_shared/docBuilder.ts";
+import { uploadDocumentWithRetry } from "../_shared/documentPersistence.ts";
 import { paletteHex } from "../_shared/palette.ts";
 import { buildSparseResult, detectSparseExtraction, validateGenerationResponse } from "../_shared/sparse.ts";
 import type { ExtractionData, FollowUpQuestion, OutputType } from "../_shared/types.ts";
@@ -58,7 +59,7 @@ import type { ExtractionData, FollowUpQuestion, OutputType } from "../_shared/ty
 interface RequestBody {
   propertyId?: string;
   audioStoragePath?: string;
-  /** QA-only pasted walkthrough text; mutually exclusive with audioStoragePath. */
+  /** Testing-only pasted walkthrough text; mutually exclusive with audio input. */
   walkthroughText?: string;
   selectedOutputs?: OutputType[];
   /** Answers to FollowUpStage questions, keyed by question id. */
@@ -339,43 +340,17 @@ async function runPass1(
         .eq("id", propertyId);
     };
     const onRetry = async (attempt: number, max: number) => {
-      console.warn(`[generate:pass1] AI service hiccup — retry ${attempt}/${max}`);
-      await adminClient.from("properties")
-        .update({ pipeline_status: "retrying_extraction" })
-        .eq("id", propertyId);
-    };
-
+          console.warn(`[generate:pass1] AI service hiccup — retry ${attempt}/${max}`);
+          await adminClient.from("properties")
+            .update({ pipeline_status: "retrying_extraction" })
+            .eq("id", propertyId);
+      };
     if (walkthroughText?.trim()) {
-      const prompt = buildTextExtractionPrompt().replace("[PASTED_WALKTHROUGH_TEXT]", walkthroughText.trim());
-      rawText = await callTextGemini(apiKey, prompt, 16000, onRateLimitRetry, onRetry);
+      rawText = await callTextGemini(apiKey, buildTextExtractionPrompt().replace("[PASTED_WALKTHROUGH_TEXT]", walkthroughText.trim()), 16000, onRateLimitRetry, onRetry);
     } else {
-      const { data: audioBlob, error: downloadError } = await adminClient.storage
-        .from("walkthrough-audio")
-        .download(audioStoragePath!);
-
-      if (downloadError || !audioBlob) {
-        console.error("[generate:pass1] audio download error:", downloadError);
-        await adminClient.from("properties")
-          .update({ status: "error", pipeline_status: "error", error_message: "Audio file not found in storage" })
-          .eq("id", propertyId);
-        return errorResponse("Could not retrieve your audio recording. It may have been deleted. Please re-record.", 400);
-      }
-
-      let audioBase64: string;
-      try {
-        audioBase64 = await blobToBase64(audioBlob);
-      } catch (encodeErr) {
-        console.error("[generate:pass1] audio encoding error:", encodeErr);
-        await adminClient.from("properties")
-          .update({ status: "error", pipeline_status: "error", error_message: "Failed to encode audio" })
-          .eq("id", propertyId);
-        return errorResponse("Failed to process audio file. Please try re-recording.", 500);
-      }
-
-      rawText = await callGemini(
-        apiKey, buildExtractionPrompt(), audioBase64, mimeTypeFromPath(audioStoragePath!), 16000,
-        { onRateLimitRetry, onRetry }
-      );
+      const { data: audioBlob, error: downloadError } = await adminClient.storage.from("walkthrough-audio").download(audioStoragePath!);
+      if (downloadError || !audioBlob) return errorResponse("Could not retrieve your audio recording. Please re-record.", 400);
+      rawText = await callGemini(apiKey, buildExtractionPrompt(), await blobToBase64(audioBlob), mimeTypeFromPath(audioStoragePath!), 16000, { onRateLimitRetry, onRetry });
     }
   } catch (geminiErr) {
     const msg = geminiErr instanceof Error ? geminiErr.message : "AI service error. Please try again.";
@@ -885,34 +860,43 @@ async function runPass2(
   // single source of truth — the in-app viewer (mammoth) and the download
   // button both serve the same file from storage.
   const documentPaths: Record<string, string> = {};
+  const documentFailures: Record<string, string> = {};
 
-  await Promise.all(
-    outputs.map(async (outputType) => {
-      const docData = parsed[outputType] as Record<string, unknown> | undefined;
-      if (!docData) return;
-      try {
-        const bytes    = await buildDocx(outputType, docData, address, brandOptions, roomPhotoMap);
-        const safeName = outputType.replace(/_/g, "-");
-        const path     = `documents/${userId}/${propertyId}/${safeName}.docx`;
+  // Build and upload one document at a time. This avoids combining a burst
+  // of Storage writes with multiple docx pack operations, and lets a single
+  // transient upload failure retry without affecting the other outputs.
+  for (const outputType of outputs) {
+    const docData = parsed[outputType] as Record<string, unknown> | undefined;
+    if (!docData) {
+      documentFailures[outputType] = "The document content was unavailable after generation.";
+      console.error(`[generate:pass2] cannot store ${outputType}: document content was missing`);
+      continue;
+    }
 
-        const { error: uploadError } = await adminClient.storage
-          .from("walkthrough-audio")
-          .upload(path, bytes, {
-            contentType:  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            upsert:       true,
-          });
+    try {
+      const bytes    = await buildDocx(outputType, docData, address, brandOptions, roomPhotoMap);
+      const safeName = outputType.replace(/_/g, "-");
+      const path     = `documents/${userId}/${propertyId}/${safeName}.docx`;
+      const uploadResult = await uploadDocumentWithRetry(() => adminClient.storage
+        .from("walkthrough-audio")
+        .upload(path, bytes, {
+          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          upsert: true,
+        }));
 
-        if (uploadError) {
-          console.error(`[generate:pass2] failed to upload ${outputType} docx:`, uploadError.message);
-        } else {
-          documentPaths[outputType] = path;
-          console.log(`[generate:pass2] uploaded ${path}`);
-        }
-      } catch (buildErr) {
-        console.error(`[generate:pass2] failed to build ${outputType} docx:`, buildErr);
+      if (!uploadResult.ok) {
+        documentFailures[outputType] = `The document could not be stored after ${uploadResult.attempts} attempts: ${uploadResult.error ?? "unknown storage error"}`;
+        console.error(`[generate:pass2] failed to upload ${outputType} docx after ${uploadResult.attempts} attempts:`, uploadResult.error);
+        continue;
       }
-    })
-  );
+
+      documentPaths[outputType] = path;
+      console.log(`[generate:pass2] uploaded ${path} on attempt ${uploadResult.attempts}`);
+    } catch (buildErr) {
+      documentFailures[outputType] = "The document could not be prepared from the generated content.";
+      console.error(`[generate:pass2] failed to build ${outputType} docx:`, buildErr);
+    }
+  }
 
   // ── Persist documents ─────────────────────────────────────────────────
   // The manifest is the single source for the UI count and Download All. It
@@ -939,7 +923,10 @@ async function runPass2(
         finalRegenerationCounts[outputType] = 0;
       }
     } else if (!regeneration?.isRegeneration) {
-      finalManifest[outputType] = { status: "failed", error: "The document could not be stored. Please try again." };
+      finalManifest[outputType] = {
+        status: "failed",
+        error: documentFailures[outputType] ?? "The document could not be stored. Please try again.",
+      };
     }
   }
 

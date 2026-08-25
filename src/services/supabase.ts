@@ -494,7 +494,7 @@ export const propertiesService = {
     manualData?: Record<string, string>,
     /** Regenerate exactly one already-generated document from the saved property record. */
     regenerateOutput?: OutputType,
-    /** QA-only pasted walkthrough text; mutually exclusive with audio input. */
+    /** Testing-only pasted walkthrough text; mutually exclusive with audio input. */
     walkthroughText?: string,
   ): Promise<GeneratedContent> {
     const { data: { session } } = await supabase.auth.getSession();
@@ -546,8 +546,8 @@ export const propertiesService = {
     propertyId: string,
     audioStoragePath: string,
     selectedOutputs: OutputType[],
-    /** QA-only pasted walkthrough text. */
-    walkthroughText?: string
+    /** Testing-only pasted walkthrough text. */
+    walkthroughText?: string,
   ): Promise<(GeneratedContent & Record<string, unknown>) | null> {
     try {
       return await this.analyze(propertyId, audioStoragePath, selectedOutputs, undefined, undefined, undefined, walkthroughText) as GeneratedContent & Record<string, unknown>;
@@ -626,3 +626,133 @@ export async function getDocumentSignedUrl(storagePath: string): Promise<string>
   }
   return data.signedUrl;
 }
+
+// ─── V84 seller Home Launch Checklist ─────────────────────────────────────────
+
+export type LaunchTaskCategory = 'fix' | 'prepare' | 'proof' | 'access';
+export type LaunchTaskStatus = 'not_started' | 'in_progress' | 'submitted' | 'needs_help' | 'not_applicable' | 'reviewed';
+
+export interface SellerContact { id: string; agent_id: string; name: string; email: string | null; role: 'seller' | 'buyer' | 'both'; }
+export interface HomeLaunchPlan { id: string; agent_id: string; property_id: string; seller_contact_id: string | null; status: 'draft' | 'shared' | 'submitted' | 'under_review' | 'ready'; agent_intro: string | null; launch_target_date: string | null; created_at: string; updated_at: string; }
+export interface HomeLaunchTask { id: string; plan_id: string; agent_id: string; category: LaunchTaskCategory; title: string; why_it_matters: string | null; mandatory: boolean; requires_upload: boolean; requires_review: boolean; due_date: string | null; display_order: number; seller_status: LaunchTaskStatus; seller_completion_date: string | null; seller_note: string | null; agent_review_status: 'pending' | 'approved' | 'follow_up'; }
+export interface SellerLink { id: string; plan_id: string; status: 'active' | 'revoked'; expires_at: string | null; created_at: string; }
+export interface LaunchNotice { id: string; property_id: string | null; plan_id: string | null; task_id: string | null; kind: string; title: string; detail: string | null; status: 'new' | 'read' | 'handled' | 'dismissed'; created_at: string; }
+
+function createOpaqueToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+async function tokenHash(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export const launchPlanService = {
+  async listContacts(): Promise<SellerContact[]> {
+    const { data, error } = await supabase.from('contacts').select('*').in('role', ['seller', 'both']).order('created_at', { ascending: false });
+    if (error) throw new Error(`Could not load seller contacts: ${error.message}`);
+    return (data ?? []) as SellerContact[];
+  },
+  async createContact(agentId: string, name: string, email?: string): Promise<SellerContact> {
+    const { data, error } = await supabase.from('contacts').insert({ agent_id: agentId, name: name.trim(), email: email?.trim() || null, role: 'seller' }).select().single();
+    if (error) throw new Error(`Could not create seller contact: ${error.message}`);
+    return data as SellerContact;
+  },
+  async getOrCreatePlan(agentId: string, propertyId: string): Promise<HomeLaunchPlan> {
+    const { data: existing, error: existingError } = await supabase.from('home_launch_plans').select('*').eq('property_id', propertyId).maybeSingle();
+    if (existingError) throw new Error(`Could not load Home Launch Plan: ${existingError.message}`);
+    if (existing) return existing as HomeLaunchPlan;
+    const { data, error } = await supabase.from('home_launch_plans').insert({ agent_id: agentId, property_id: propertyId }).select().single();
+    if (error) throw new Error(`Could not create Home Launch Plan: ${error.message}`);
+    return data as HomeLaunchPlan;
+  },
+  async generateDraft(propertyId: string): Promise<Array<Pick<HomeLaunchTask, 'category' | 'title' | 'why_it_matters' | 'mandatory' | 'requires_upload' | 'requires_review'>>> {
+    const { data, error } = await supabase.functions.invoke('generate-launch-plan', { body: { propertyId } });
+    if (error) throw new Error(error.message || 'Could not create the Home Launch draft.');
+    const tasks = (data as { tasks?: unknown })?.tasks;
+    if (!Array.isArray(tasks)) throw new Error('AI returned an invalid Home Launch draft.');
+    return tasks.map((task) => ({ ...(task as Pick<HomeLaunchTask, 'category' | 'title' | 'why_it_matters' | 'mandatory' | 'requires_upload'>), requires_review: true }));
+  },
+  async updatePlan(planId: string, updates: Partial<Pick<HomeLaunchPlan, 'seller_contact_id' | 'agent_intro' | 'launch_target_date' | 'status'>>): Promise<void> {
+    const { error } = await supabase.from('home_launch_plans').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', planId);
+    if (error) throw new Error(`Could not save Home Launch Plan: ${error.message}`);
+  },
+  async listTasks(planId: string): Promise<HomeLaunchTask[]> {
+    const { data, error } = await supabase.from('home_launch_tasks').select('*').eq('plan_id', planId).order('display_order');
+    if (error) throw new Error(`Could not load checklist: ${error.message}`);
+    return (data ?? []) as HomeLaunchTask[];
+  },
+  async saveTasks(agentId: string, planId: string, tasks: Array<Partial<HomeLaunchTask> & Pick<HomeLaunchTask, 'title' | 'category'>>): Promise<HomeLaunchTask[]> {
+    const payload = tasks.map((task, display_order) => ({ id: task.id, agent_id: agentId, plan_id: planId, category: task.category, title: task.title.trim(), why_it_matters: task.why_it_matters?.trim() || null, mandatory: Boolean(task.mandatory), requires_upload: Boolean(task.requires_upload), requires_review: task.requires_review !== false, due_date: task.due_date || null, display_order }));
+    const { error: clearError } = await supabase.from('home_launch_tasks').delete().eq('plan_id', planId);
+    if (clearError) throw new Error(`Could not update checklist: ${clearError.message}`);
+    if (payload.length === 0) return [];
+    const { data, error } = await supabase.from('home_launch_tasks').insert(payload).select();
+    if (error) throw new Error(`Could not save checklist: ${error.message}`);
+    return (data ?? []) as HomeLaunchTask[];
+  },
+  async listNotices(propertyId: string): Promise<LaunchNotice[]> {
+    const { data, error } = await supabase.from('notices').select('*').eq('property_id', propertyId).order('created_at', { ascending: false });
+    if (error) throw new Error(`Could not load seller notices: ${error.message}`);
+    return (data ?? []) as LaunchNotice[];
+  },
+  async setTaskReview(taskId: string, review: 'approved' | 'follow_up'): Promise<void> {
+    const { error } = await supabase.from('home_launch_tasks').update({ agent_review_status: review, seller_status: review === 'approved' ? 'reviewed' : 'in_progress', updated_at: new Date().toISOString() }).eq('id', taskId);
+    if (error) throw new Error(`Could not review checklist task: ${error.message}`);
+  },
+  async createSellerLink(agentId: string, planId: string): Promise<{ link: SellerLink; rawToken: string }> {
+    const rawToken = createOpaqueToken();
+    const { data, error } = await supabase.from('seller_links').insert({ agent_id: agentId, plan_id: planId, token_hash: await tokenHash(rawToken) }).select().single();
+    if (error) throw new Error(`Could not create private Seller Link: ${error.message}`);
+    await this.updatePlan(planId, { status: 'shared' });
+    return { link: data as SellerLink, rawToken };
+  },
+  async revokeSellerLink(id: string): Promise<void> {
+    const { error } = await supabase.from('seller_links').update({ status: 'revoked', updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw new Error(`Could not revoke Seller Link: ${error.message}`);
+  },
+};
+
+export async function sellerLinkRequest<T>(body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${supabaseUrl}/functions/v1/seller-link`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: supabaseAnonKey }, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string }).error ?? 'This private link is unavailable.');
+  return data as T;
+}
+
+// ─── V86 buyer workflow ───────────────────────────────────────────────────────
+export interface BuyerSearch { id: string; agent_id: string; buyer_contact_id: string | null; label: string; status: 'draft' | 'waiting_preferences' | 'preferences_received' | 'source_review' | 'shortlist_shared' | 'tour_requests' | 'complete'; preferences_data: Record<string, unknown>; agent_note: string | null; created_at: string; updated_at: string; }
+export interface BuyerLink { id: string; buyer_search_id: string; kind: 'preferences' | 'shortlist'; status: 'active' | 'revoked'; expires_at: string | null; created_at: string; }
+export interface BuyerHome { id: string; buyer_search_id: string; title: string; listing_url: string; image_url: string | null; summary: string | null; agent_reason: string | null; display_order: number; status: 'draft' | 'sent' | 'tour_requested' | 'not_interested' | 'tour_booked'; }
+export interface BuyerAvailabilitySlot { id: string; buyer_search_id: string; starts_at: string; ends_at: string; status: 'available' | 'held' | 'booked' | 'cancelled'; }
+
+export const buyerService = {
+  async createSearch(agentId: string, label: string, buyerName?: string, buyerEmail?: string): Promise<BuyerSearch> {
+    let buyerContactId: string | null = null;
+    if (buyerName?.trim()) {
+      const { data, error } = await supabase.from('contacts').insert({ agent_id: agentId, name: buyerName.trim(), email: buyerEmail?.trim() || null, role: 'buyer' }).select().single();
+      if (error) throw new Error(`Could not add buyer: ${error.message}`);
+      buyerContactId = data.id;
+    }
+    const { data, error } = await supabase.from('buyer_searches').insert({ agent_id: agentId, buyer_contact_id: buyerContactId, label: label.trim() || 'New buyer search', status: 'draft' }).select().single();
+    if (error) throw new Error(`Could not create buyer search: ${error.message}`);
+    return data as BuyerSearch;
+  },
+  async listSearches(): Promise<BuyerSearch[]> { const { data, error } = await supabase.from('buyer_searches').select('*').order('updated_at', { ascending: false }); if (error) throw new Error(`Could not load buyer searches: ${error.message}`); return (data ?? []) as BuyerSearch[]; },
+  async updateSearch(id: string, updates: Partial<Pick<BuyerSearch, 'label' | 'status' | 'preferences_data' | 'agent_note' | 'buyer_contact_id'>>): Promise<void> { const { error } = await supabase.from('buyer_searches').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id); if (error) throw new Error(`Could not save buyer search: ${error.message}`); },
+  async listHomes(searchId: string): Promise<BuyerHome[]> { const { data, error } = await supabase.from('buyer_homes').select('*').eq('buyer_search_id', searchId).order('display_order'); if (error) throw new Error(`Could not load homes: ${error.message}`); return (data ?? []) as BuyerHome[]; },
+  async saveHomes(agentId: string, searchId: string, homes: Array<Partial<BuyerHome> & Pick<BuyerHome, 'title' | 'listing_url'>>): Promise<BuyerHome[]> {
+    const { error: removeError } = await supabase.from('buyer_homes').delete().eq('buyer_search_id', searchId); if (removeError) throw new Error(`Could not update homes: ${removeError.message}`);
+    if (!homes.length) return [];
+    const payload = homes.slice(0, 5).map((home, display_order) => ({ agent_id: agentId, buyer_search_id: searchId, title: home.title.trim(), listing_url: home.listing_url.trim(), image_url: home.image_url || null, summary: home.summary || null, agent_reason: home.agent_reason || null, display_order, status: 'draft' }));
+    const { data, error } = await supabase.from('buyer_homes').insert(payload).select(); if (error) throw new Error(`Could not save homes: ${error.message}`); return (data ?? []) as BuyerHome[];
+  },
+  async saveSlots(agentId: string, searchId: string, starts: string[]): Promise<BuyerAvailabilitySlot[]> { const { error: removeError } = await supabase.from('buyer_availability_slots').delete().eq('buyer_search_id', searchId); if (removeError) throw new Error(`Could not update availability: ${removeError.message}`); const payload = starts.slice(0, 15).map((start) => ({ agent_id: agentId, buyer_search_id: searchId, starts_at: new Date(start).toISOString(), ends_at: new Date(new Date(start).getTime() + 60 * 60 * 1000).toISOString() })); if (!payload.length) return []; const { data, error } = await supabase.from('buyer_availability_slots').insert(payload).select(); if (error) throw new Error(`Could not save availability: ${error.message}`); return (data ?? []) as BuyerAvailabilitySlot[]; },
+  async createLink(agentId: string, searchId: string, kind: BuyerLink['kind']): Promise<{ link: BuyerLink; rawToken: string }> { const rawToken = createOpaqueToken(); const { data, error } = await supabase.from('buyer_links').insert({ agent_id: agentId, buyer_search_id: searchId, kind, token_hash: await tokenHash(rawToken) }).select().single(); if (error) throw new Error(`Could not create private Buyer Link: ${error.message}`); await this.updateSearch(searchId, { status: kind === 'preferences' ? 'waiting_preferences' : 'shortlist_shared' }); if (kind === 'shortlist') await supabase.from('buyer_homes').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('buyer_search_id', searchId).eq('status', 'draft'); return { link: data as BuyerLink, rawToken }; },
+  async reviewSources(searchId: string): Promise<{ homes: Array<{ title: string; url: string; match_reason: string; source_title: string }> }> { const { data, error } = await supabase.functions.invoke('review-buyer-sources', { body: { buyerSearchId: searchId } }); if (error) throw new Error(error.message || 'Could not review current sources.'); return data as { homes: Array<{ title: string; url: string; match_reason: string; source_title: string }> }; },
+};
+
+export async function buyerLinkRequest<T>(body: Record<string, unknown>): Promise<T> { const response = await fetch(`${supabaseUrl}/functions/v1/buyer-link`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: supabaseAnonKey }, body: JSON.stringify(body) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error((data as { error?: string }).error ?? 'This private link is unavailable.'); return data as T; }
+export async function buyerPreferenceTranscribe<T>(body: { token: string; audioBase64: string; mimeType: string }): Promise<T> { const response = await fetch(`${supabaseUrl}/functions/v1/transcribe-buyer-preferences`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: supabaseAnonKey }, body: JSON.stringify(body) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error((data as { error?: string }).error ?? 'Could not read that recording.'); return data as T; }
+export async function agentBuyerBriefTranscribe<T>(body: { buyerSearchId: string; audioBase64: string; mimeType: string }): Promise<T> { const { data, error } = await supabase.functions.invoke('transcribe-agent-buyer-brief', { body }); if (error) throw new Error(error.message || 'Could not prepare the buyer brief.'); return data as T; }

@@ -15,10 +15,9 @@
  *  - findLowConfidenceFields(): walks the extraction looking for fields
  *    below CONFIDENCE_THRESHOLD or empty required fields, used by
  *    generate-followups to build its question list.
- *  - mergeFollowUpAnswers(): merges agent-confirmed follow-up answers
- *    into an ExtractionData object ahead of Pass 2, overriding
- *    low-confidence / missing fields with the confirmed values at
- *    confidence 100.
+ *  - mergeFollowUpAnswers(): merges follow-up answers into an ExtractionData
+ *    object ahead of Pass 2. Confirmed answers receive confidence 100, while
+ *    explicit unknown answers remain unknown or unverified.
  */
 
 import type { ExtractedField, ExtractionData, FollowUpQuestion, RoomExtraction } from "./types.ts";
@@ -162,27 +161,22 @@ ${EXTRACTION_SCHEMA}
 Respond with ONLY the JSON object.`;
 }
 
-/**
- * QA-only Pass 1 prompt for pasted walkthrough text. It keeps the same
- * schema and provenance rules but removes the audio/transcription framing.
- */
+/** Testing-only Pass 1 prompt for pasted walkthrough text. */
 export function buildTextExtractionPrompt(): string {
   return `You are Walkthrough AI's text extraction system.
 
-Read the pasted property walkthrough below and convert the information it contains into the strict structured JSON format. Do not transcribe, summarize outside the JSON, or invent details. Extract the substance of what is written and preserve the speaker's meaning, attribution, uncertainty, estimates, and claims.
+Read the pasted property walkthrough below and convert it into the strict structured JSON format. Preserve attribution, uncertainty, estimates, and unverified details. Do not invent anything.
 
 ## CRITICAL RULES
-- Use ONLY information explicitly present in the pasted walkthrough. Never add, infer, or invent property details.
-- Preserve who supplied each claim. For example, "the seller said the roof was replaced" must use source seller_stated, not observed or user_confirmed.
-- Preserve uncertainty and estimates such as "I think", "believed", "possibly", "around", "approximately", "may", and "unconfirmed" in the value and source metadata.
-- If a field is not present, use value "not mentioned" (or [] for arrays), confidence 0, and source unknown.
-- Every field object must include value, confidence, and source. Use the source vocabulary from the schema: observed, seller_stated, agent_stated, external_document, unverified, unknown, or conflicting. Do not use user_confirmed in Pass 1.
-- Approximate or hedged details are still details: extract them with confidence 50-69 rather than treating them as absent.
-- Correct obvious spelling or punctuation only when needed to understand the written walkthrough; do not strengthen the claim.
+- Use only information explicitly present in the pasted walkthrough.
+- Preserve seller claims as seller_stated and agent observations as observed or agent_stated as appropriate.
+- Preserve uncertainty such as approximately, believed, possibly, unconfirmed, and around.
+- Missing scalar fields use "not mentioned"; missing arrays use []; confidence 0; source unknown.
+- Every field object must include value, confidence, and source using: observed, seller_stated, agent_stated, external_document, unverified, unknown, or conflicting. Do not use user_confirmed in Pass 1.
 - Do not include fair-housing or demographic steering content.
-- Respond with ONLY a valid JSON object. No markdown, code fences, transcription, or commentary.
+- Return only valid JSON with no markdown or commentary.
 
-Return ONLY this JSON object, fully populated for every field shown:
+Return this complete schema:
 
 ${EXTRACTION_SCHEMA}
 
@@ -190,7 +184,7 @@ Pasted walkthrough text:
 
 [PASTED_WALKTHROUGH_TEXT]
 
-Respond with ONLY the JSON object.`;
+Respond with only the JSON object.`;
 }
 
 // ─── Validation / safe defaults ───────────────────────────────────────────────
@@ -560,16 +554,17 @@ export function mergeFollowUpAnswers(
     const answer = answers[q.id]?.trim();
     if (!answer) continue;
 
-    const normalizedAnswer = normalizeFollowUpAnswer(answer);
+    const isUnknownAnswer = isExplicitUnknownFollowUpAnswer(answer);
+    const normalizedAnswer = isUnknownAnswer ? "not mentioned" : normalizeFollowUpAnswer(answer);
     if (!normalizedAnswer) continue;
 
     if (q.field_path) {
-      const applied = setFieldByPath(merged, q.field_path, normalizedAnswer);
+      const applied = setFieldByPath(merged, q.field_path, normalizedAnswer, isUnknownAnswer);
       if (applied) continue;
     }
 
     // No field_path, or couldn't apply — fold into the general summary
-    extraNotes.push(`${q.question} ${normalizedAnswer}`);
+    if (!isUnknownAnswer) extraNotes.push(`${q.question} ${normalizedAnswer}`);
   }
 
   if (extraNotes.length > 0) {
@@ -587,13 +582,14 @@ export function mergeFollowUpAnswers(
 }
 
 /**
- * Set a field by dot-path to a confirmed value (confidence 100).
+ * Set a field by dot-path to a confirmed value (confidence 100), or preserve
+ * unknown/unverified status when the agent explicitly selects “I don't know”.
  * For array-typed fields, the answer is appended as a new entry rather
  * than replacing the whole list, since follow-up answers are usually
  * supplemental ("any issues?" → "leaky faucet in the kitchen").
  * Returns false if the path doesn't resolve to a known ExtractedField.
  */
-function setFieldByPath(data: ExtractionData, path: string, answer: string): boolean {
+function setFieldByPath(data: ExtractionData, path: string, answer: string, isUnknownAnswer = false): boolean {
   // BUGFIX: "rooms" and "transaction_notes.milestones" used to be rejected
   // here entirely (return false) because appending a raw answer string
   // would corrupt their structured array shapes (RoomExtraction[] and
@@ -608,9 +604,11 @@ function setFieldByPath(data: ExtractionData, path: string, answer: string): boo
   // Fix: build a minimal-but-valid structured entry from the free-text
   // answer and append it properly, instead of discarding the structure.
   if (path === "rooms") {
+    if (isUnknownAnswer) return true;
     return appendRoomAnswer(data, answer);
   }
   if (path === "transaction_notes.milestones") {
+    if (isUnknownAnswer) return true;
     return appendMilestoneAnswer(data, answer);
   }
 
@@ -625,6 +623,16 @@ function setFieldByPath(data: ExtractionData, path: string, answer: string): boo
   const field = cur?.[lastKey];
   if (!field || typeof field !== "object" || !("value" in field)) return false;
 
+  if (isUnknownAnswer) {
+    const hasEarlierEvidence = !isFieldEmpty(field.value);
+    field.confidence = hasEarlierEvidence ? Math.min(Number(field.confidence ?? 0), 49) : 0;
+    field.source = hasEarlierEvidence ? "unverified" : "unknown";
+    field.note = hasEarlierEvidence
+      ? "Agent could not confirm this information in a follow-up answer"
+      : "Agent marked this information as unknown in a follow-up answer";
+    return true;
+  }
+
   if (Array.isArray(field.value)) {
     field.value = [...field.value, answer];
   } else {
@@ -634,6 +642,17 @@ function setFieldByPath(data: ExtractionData, path: string, answer: string): boo
   field.source = "user_confirmed";
   field.note = "Confirmed or corrected through a follow-up answer";
   return true;
+}
+
+/**
+ * The UI sends a stable marker for the explicit unknown button. Typed answers
+ * that plainly communicate no knowledge are also handled safely, so “I don't
+ * know” or “Not stated” cannot acquire a green confirmed label by accident.
+ */
+function isExplicitUnknownFollowUpAnswer(answer: string): boolean {
+  if (answer === "__WALKTHROUGH_UNKNOWN__") return true;
+  const normalized = answer.trim().toLowerCase();
+  return /^(?:i (?:do not|don't) know|unknown|not (?:stated|provided|mentioned|available)|no idea)(?:[.!;,:].*)?$/.test(normalized);
 }
 
 /**

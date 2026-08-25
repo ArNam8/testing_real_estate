@@ -130,15 +130,29 @@ export const OUTPUT_SCHEMAS: Record<OutputType, string> = {
 };
 
 /**
- * Strip confidence scores from the extraction data before handing it to
- * Pass 2 — Pass 2 only needs the resolved values. This also shrinks the
- * prompt considerably (confidence numbers add no value to document drafting).
+ * Turn extraction fields into drafting data while retaining the provenance
+ * instruction each value requires. Pass 2 does not need confidence numbers,
+ * but it must receive source and note information in a form that cannot be
+ * mistaken for optional background context.
  */
 function stripConfidence(data: ExtractionData): Record<string, unknown> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const strip = (node: any): unknown => {
-    if (node && typeof node === "object" && "value" in node && "confidence" in node && Object.keys(node).length === 2) {
-      return strip(node.value);
+    if (node && typeof node === "object" && "value" in node && "confidence" in node) {
+      const hasExplicitSource = typeof node.source === "string";
+      const source = hasExplicitSource ? node.source : "unverified";
+      const note = typeof node.note === "string" && node.note.trim() ? node.note.trim() : undefined;
+      return {
+        // Source-qualified values are deliberately the value that Pass 2 sees
+        // and drafts from. This turns attribution from a side note into part
+        // of the underlying fact, preventing a seller/agent claim from being
+        // silently treated as an observed fact when it appears in prose or a
+        // Listing Pack fact strip.
+        value: hasExplicitSource ? qualifyValueForPresentation(strip(node.value), source) : strip(node.value),
+        source,
+        presentation_requirement: presentationRequirementFor(source),
+        ...(note ? { note } : {}),
+      };
     }
     if (Array.isArray(node)) {
       return node.map(strip);
@@ -151,6 +165,63 @@ function stripConfidence(data: ExtractionData): Record<string, unknown> {
     return node;
   };
   return strip(data) as Record<string, unknown>;
+}
+
+/** Keep source attribution inseparable from any non-confirmed text value. */
+function qualifyValueForPresentation(value: unknown, source: string): unknown {
+  const prefix = sourcePrefix(source);
+  if (!prefix) return value;
+
+  const qualify = (item: unknown): unknown => {
+    if (typeof item !== "string" || !item.trim() || item === "not mentioned") return item;
+    return item.toLowerCase().startsWith(prefix.toLowerCase()) ? item : `${prefix}${item}`;
+  };
+
+  if (Array.isArray(value)) return value.map(qualify);
+  return qualify(value);
+}
+
+function sourcePrefix(source: string): string | null {
+  switch (source) {
+    case "seller_stated":
+      return "Seller stated: ";
+    case "agent_stated":
+      return "Agent stated: ";
+    case "external_document":
+      return "According to the provided documentation: ";
+    case "unverified":
+      return "Unverified: ";
+    case "conflicting":
+      return "Conflicting information: ";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Convert source metadata into a direct, field-level instruction for Pass 2.
+ * Missing provenance is deliberately treated as unverified to protect legacy
+ * extraction records that pre-date the source field.
+ */
+function presentationRequirementFor(source: string): string {
+  switch (source) {
+    case "user_confirmed":
+      return "May be stated directly as confirmed information.";
+    case "observed":
+      return "May be described as observed; do not imply independent verification beyond the observation.";
+    case "seller_stated":
+      return "MUST remain attributed to the seller or owner. Use wording such as 'Seller stated', 'According to the seller', or 'Seller-reported'. Never rewrite it as observed or confirmed.";
+    case "agent_stated":
+      return "MUST remain attributed to the agent. Use wording such as 'Agent stated', 'Agent-reported', or another clearly equivalent attribution. Never rewrite it as observed or confirmed.";
+    case "external_document":
+      return "MUST remain attributed to the referenced documentation. Do not present it as personally observed or independently verified.";
+    case "conflicting":
+      return "MUST identify the information as conflicting or omit it. Never select one value and state it as fact.";
+    case "unknown":
+      return "Do not include this value in prose, headlines, highlights, or structured facts.";
+    default:
+      return "MUST remain qualified as unverified, approximate, reported, believed, possible, or otherwise uncertain. Never rewrite it as observed or confirmed.";
+  }
 }
 
 /**
@@ -179,6 +250,10 @@ REMINDERS before you write:
 - user_confirmed values may be stated directly; other source states must retain appropriate attribution or qualification.
 - Where the JSON value is "not mentioned" or empty: omit from prose, use null in structured fields. Never write "not mentioned" in a sentence.
 - Preserve qualifiers and notes when they change what the reader should believe.
+- Every field includes a binding presentation requirement. Treat it as part of the fact itself, not a suggestion. It applies everywhere the value appears: headline, description, bullets, highlights, fact sheet, and room details.
+- Source-qualified values such as "Seller stated: roof replaced in 2022" or "Agent stated: fireplace serviced recently" already contain required wording. If you use them, preserve that attribution exactly or with an equally clear attribution. Never delete, invert, or replace the source label.
+- Do not use seller_stated, agent_stated, external_document, unverified, or conflicting claims in a headline unless the attribution or qualification is retained in the headline itself. It is always safer to omit an uncertain claim than to upgrade it.
+- Never substitute the word "observed" for a seller- or agent-attributed claim. Never remove the origin of a reported renovation, repair, condition, feature, or date.
 - Follow-up answers may be informal or misspelled. Rewrite them into natural professional language while retaining their original meaning, source, and certainty.
 - Write professional real estate documents — no irrelevant meta-commentary, no filler, no reference to AI.
 - Shorter and accurate is always better than longer and padded.

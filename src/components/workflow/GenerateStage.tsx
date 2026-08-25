@@ -44,7 +44,7 @@ import JSZip from 'jszip';
 interface GenerateStageProps {
   propertyId: string;
   audioPath: string;
-  /** QA-only pasted walkthrough input. */
+  /** Testing-only text walkthrough retained for a resumed Pass 1 call. */
   walkthroughText?: string | null;
   selectedOutputs: OutputType[];
   /**
@@ -76,6 +76,8 @@ interface GenerateStageProps {
    */
   isReopening?: boolean;
   onComplete: () => void;
+  /** Opens the agent-owned Home Launch Plan after documents are available. */
+  onOpenLaunchPlan?: (propertyId: string) => void;
   onRetry: () => void;
   /** Called with true when a document modal opens, false when it closes.
    *  Lets the parent (App) hide WorkflowShell bars so modal is top layer. */
@@ -488,6 +490,7 @@ export function GenerateStage({
   pipelineResult,
   isReopening = false,
   onComplete,
+  onOpenLaunchPlan,
   onRetry,
   onModalChange,
 }: GenerateStageProps) {
@@ -617,7 +620,7 @@ export function GenerateStage({
         hasFollowUpAnswers ? followUpAnswers : undefined,
         sparseManualData,
         undefined,
-        walkthroughText ?? undefined
+        walkthroughText ?? undefined,
       );
 
       await applyResult(result as GeneratedContent & Record<string, unknown>);
@@ -707,7 +710,7 @@ export function GenerateStage({
       }
 
       // ── Case 3: Fresh generation needed ─────────────────────────────────
-      if (!audioPath && !walkthroughText) {
+      if (!audioPath && !walkthroughText?.trim()) {
         setErrorMessage('No walkthrough input found. Please return and paste the walkthrough again.');
         setPhase('error');
         return;
@@ -975,6 +978,19 @@ export function GenerateStage({
           />
         ))}
       </div>
+
+      {/* Documents are the complete end of the five-step workflow. This is a
+          deliberate, optional next job—not a sixth required workflow step. */}
+      {onOpenLaunchPlan && (
+        <button
+          onClick={() => onOpenLaunchPlan(property.id)}
+          className="w-full mt-7 rounded-3xl p-6 text-left flex flex-col sm:flex-row sm:items-center justify-between gap-5 transition-transform duration-200 active:scale-[0.985]"
+          style={{ background: 'linear-gradient(135deg, #E6F2EA, #F4FAF6)', border: '1px solid rgba(95,156,121,0.38)', boxShadow: '0 10px 24px rgba(50,104,81,0.10)' }}
+        >
+          <div><p className="font-bold text-xl" style={{ color: '#1E4D3A' }}>Now get the house ready</p><p className="text-sm mt-1.5 leading-relaxed max-w-xl" style={{ color: '#49735D' }}>Walkthrough will suggest the most useful seller tasks, proof to request, and questions to confirm. You decide what the seller sees.</p></div>
+          <span className="flex-shrink-0 rounded-2xl px-5 py-3 text-sm font-bold text-white" style={{ background: '#326851' }}>Build plan</span>
+        </button>
+      )}
 
       {/* Footer */}
       <div className="mt-6">

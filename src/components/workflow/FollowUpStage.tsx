@@ -44,7 +44,8 @@
  * own retry logic has its own ~60s ceiling).
  *
  * IMPORTANT: answers collected here are forwarded through to the generate
- * edge function so Gemini can use them as confirmed facts in every document.
+ * edge function. An explicit unknown answer stays unknown; it is never
+ * silently treated as a confirmed fact in a document.
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
@@ -109,6 +110,11 @@ const CATCH_UP_ROW_MS = 320;
 
 /** Brief hold once all rows are checked, before moving on (peak-end beat). */
 const COMPLETION_HOLD_MS = 600;
+
+/** Stored in the existing string answer map so the client can distinguish an
+ * explicit “I don't know” action from a blank, unanswered question. The Edge
+ * Function maps this marker to unknown/unverified provenance before Pass 2. */
+const UNKNOWN_ANSWER_VALUE = '__WALKTHROUGH_UNKNOWN__';
 
 /** The three checklist rows, each with a navy icon and a small set of
  *  synonym words that ripple in underneath while that row is active. */
@@ -613,14 +619,18 @@ export function FollowUpStage({
       {/* Question cards */}
       <div className="space-y-3 mb-8">
         {questions.map((q, i) => {
-          const answered = !!answers[q.id]?.trim();
+          const rawAnswer = answers[q.id] ?? '';
+          const isUnknown = rawAnswer === UNKNOWN_ANSWER_VALUE;
+          const answered = !!rawAnswer.trim();
           return (
             <div
               key={q.id}
               className="card p-4 transition-all duration-200 animate-slide-up"
               style={{
                 animationDelay: `${i * 40}ms`,
-                ...(answered ? { borderColor: 'rgba(30,58,95,0.35)', background: 'rgba(30,58,95,0.05)' } : {}),
+                ...(isUnknown
+                  ? { borderColor: 'rgba(217,119,6,0.38)', background: 'rgba(255,247,237,0.9)' }
+                  : answered ? { borderColor: 'rgba(30,58,95,0.35)', background: 'rgba(30,58,95,0.05)' } : {}),
               }}
             >
               <div className="flex items-start gap-3 mb-2.5">
@@ -633,7 +643,7 @@ export function FollowUpStage({
                       : { background: '#f1f5f9', color: '#94a3b8' }
                   }
                 >
-                  {answered ? <CheckCircle2 size={13} /> : i + 1}
+                  {isUnknown ? <AlertCircle size={13} /> : answered ? <CheckCircle2 size={13} /> : i + 1}
                 </div>
                 <div className="flex-1">
                   <p className="font-semibold text-sm text-slate-800 leading-snug">{q.question}</p>
@@ -644,7 +654,7 @@ export function FollowUpStage({
               </div>
               <input
                 type="text"
-                value={answers[q.id] ?? ''}
+                value={isUnknown ? '' : rawAnswer}
                 onChange={(e) =>
                   setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
                 }
@@ -652,6 +662,28 @@ export function FollowUpStage({
                 className="input-field text-sm"
                 autoComplete="off"
               />
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAnswers((prev) => ({
+                    ...prev,
+                    [q.id]: isUnknown ? '' : UNKNOWN_ANSWER_VALUE,
+                  }))}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                    isUnknown
+                      ? 'border-amber-300 bg-amber-100 text-amber-800'
+                      : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                  }`}
+                >
+                  <AlertCircle size={13} />
+                  {isUnknown ? 'Marked unknown' : "I don't know"}
+                </button>
+                {isUnknown && (
+                  <span className="text-xs font-medium text-amber-700">
+                    This will stay unknown, not confirmed.
+                  </span>
+                )}
+              </div>
             </div>
           );
         })}

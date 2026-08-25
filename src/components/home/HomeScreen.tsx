@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { Mic, ChevronRight, Clock, Trash2, ArrowRight, LogOut, AlertCircle } from 'lucide-react';
+import { Mic, ChevronRight, Clock, Trash2, ArrowRight, LogOut, AlertCircle, Home as House, Search } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import type { Property, BrandKit } from '../../services/supabase';
 import { paletteHex } from '../../utils/brandPalette';
@@ -17,6 +17,7 @@ interface HomeScreenProps {
   /** Non-null when the properties fetch failed — shown as an inline error. */
   loadError: string | null;
   onStartNew: (address: string) => void;
+  onStartBuyerSearch: () => void;
   onViewProperty: (property: Property) => void;
   onViewAllProjects: () => void;
   onDeleteProperty: (id: string) => void;
@@ -50,6 +51,7 @@ export function HomeScreen({
   loading,
   loadError,
   onStartNew,
+  onStartBuyerSearch,
   onViewProperty,
   onViewAllProjects,
   onDeleteProperty,
@@ -58,6 +60,7 @@ export function HomeScreen({
   onOpenBrandKit,
 }: HomeScreenProps) {
   const [showNewModal, setShowNewModal] = useState(false);
+  const [showActivityModal, setShowActivityModal] = useState(false);
   const [address, setAddress] = useState('');
 
 
@@ -121,7 +124,7 @@ export function HomeScreen({
             Walk the property, talk naturally — documents ready in minutes
           </p>
           <button
-            onClick={() => setShowNewModal(true)}
+            onClick={() => setShowActivityModal(true)}
             className="relative mx-auto block"
             aria-label="Start a new walkthrough"
           >
@@ -304,6 +307,9 @@ export function HomeScreen({
       </div>
 
       {/* ── New property bottom-sheet modal ── */}
+      {showActivityModal && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end"><div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setShowActivityModal(false)} /><div className="relative rounded-t-3xl p-6 animate-slide-up shadow-2xl" style={{ background: '#fdfcfa', borderTop: '1px solid rgba(226,220,210,.8)' }}><div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-6" /><p className="text-xs font-bold uppercase tracking-[.16em]" style={{ color: '#6F7D8E' }}>Start with your voice</p><h2 className="text-2xl font-bold mt-2" style={{ color: '#15263A' }}>What are you doing today?</h2><div className="mt-6 space-y-3"><button onClick={() => { setShowActivityModal(false); setShowNewModal(true); }} className="w-full p-4 rounded-2xl text-left flex gap-3" style={{ background: '#E8EEF5', border: '1px solid rgba(30,58,95,.12)' }}><span className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: '#1E3A5F' }}><House size={19} className="text-white" /></span><span><b className="block text-sm">Create a listing</b><small className="block mt-1 text-xs text-slate-500">Record the property and create your documents.</small></span></button><button onClick={() => { setShowActivityModal(false); onStartBuyerSearch(); }} className="w-full p-4 rounded-2xl text-left flex gap-3" style={{ background: '#E6F2EA', border: '1px solid rgba(50,104,81,.16)' }}><span className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: '#326851' }}><Search size={19} className="text-white" /></span><span><b className="block text-sm">Find a house for my buyer</b><small className="block mt-1 text-xs text-slate-500">Capture preferences, curate homes, and coordinate tours.</small></span></button></div><div style={{ height: 'env(safe-area-inset-bottom)' }} /></div></div>
+      )}
       {showNewModal && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end">
           {/* Backdrop */}

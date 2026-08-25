@@ -30,6 +30,10 @@ import { OutputsStage } from './components/workflow/OutputsStage';
 import { FollowUpStage } from './components/workflow/FollowUpStage';
 import { PhotosStage } from './components/workflow/PhotosStage';
 import { GenerateStage } from './components/workflow/GenerateStage';
+import { HomeLaunchPlan } from './components/launch/HomeLaunchPlan';
+import { SellerPortal, SellerPortalPreview } from './components/launch/SellerPortal';
+import { BuyerWorkspace } from './components/buyer/BuyerWorkspace';
+import { BuyerPortal } from './components/buyer/BuyerPortal';
 
 // ─── First-run Brand Kit intro tracking ────────────────────────────────────────
 // Separate from onboarding's own localStorage flag — this makes sure the
@@ -63,7 +67,7 @@ interface SessionState {
   stage: WorkflowStage;
   selectedOutputs: OutputType[];
   audioPath: string | null;
-  /** QA-only pasted walkthrough input. */
+  /** Testing-only pasted walkthrough input. */
   walkthroughText: string | null;
   /**
    * Duration of the recorded walkthrough, in seconds. Passed to FollowUpStage
@@ -104,7 +108,7 @@ interface SessionState {
 }
 
 /** Top-level view the user is currently looking at. */
-type AppView = 'onboarding' | 'home' | 'all-projects' | 'brand-kit' | 'workflow';
+type AppView = 'onboarding' | 'home' | 'all-projects' | 'brand-kit' | 'workflow' | 'launch-plan' | 'buyer-workspace';
 
 /** Which auth modal mode is open, or null if closed. */
 type AuthModalMode = 'signin' | 'signup' | null;
@@ -133,6 +137,7 @@ function App() {
   );
   const [session, setSession] = useState<SessionState | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [launchProperty, setLaunchProperty] = useState<Property | null>(null);
 
   /** True while the Brand Kit screen is open as the automatic first-run
    *  intro (right after onboarding, or on first load for an already-
@@ -292,25 +297,35 @@ function App() {
 
   // ── Workflow stage transitions ────────────────────────────────────────────
 
-  /**
-   * Pasted walkthrough submitted — persist the testing state, advance to
-   * output selection, and kick off the same two-pass pipeline using text.
-   */
+  /** Testing-only pasted walkthrough handoff into the same two-pass pipeline. */
   const handleTextComplete = useCallback(async (walkthroughText: string, durationSec: number) => {
     if (!session?.propertyId) return;
 
+    // BUGFIX: this write was previously unguarded. If it failed (network
+    // hiccup, DB error), the whole function threw before ever reaching the
+    // setSession() call below that advances the workflow past this screen —
+    // stranding the agent on WalkthroughStage's "Uploading recording…"
+    // spinner forever, with no error and no way to proceed. This write is
+    // non-fatal to continue: the pipeline call just below passes audioPath
+    // explicitly in its request body, and the edge function prefers that
+    // over the DB's audio_storage_path column, so the workflow can safely
+    // advance even if this particular save didn't persist.
     try {
       await propertiesService.update(session.propertyId, {
         status: 'recording',
         workflow_stage: 'outputs',
       });
     } catch (err) {
-      console.warn('[walkthrough_testing] failed to save workflow stage (non-fatal, continuing):', err);
+      console.warn('[App] failed to save audio_storage_path (non-fatal, continuing):', err);
     }
 
     const propertyId = session.propertyId;
     const selectedOutputs = session.selectedOutputs;
 
+    // Fire-and-forget: runs Pass 1 + a first Pass 2 draft, and triggers
+    // generate-followups in the background. We track whether it succeeded
+    // so FollowUpStage can show an honest message and skip waiting if it
+    // already failed.
     propertiesService.startPipeline(propertyId, '', selectedOutputs, walkthroughText)
       .then((result) => {
         // A sparse_audio result means Pass 1 ran but the recording was too
@@ -377,6 +392,18 @@ function App() {
     refresh();
   }, [refresh]);
 
+  /** Open the post-document Home Launch Plan for this completed listing. */
+  const handleOpenLaunchPlan = useCallback(async (propertyId: string) => {
+    try {
+      const property = await propertiesService.getById(propertyId);
+      setLaunchProperty(property);
+      setSession(null);
+      setView('launch-plan');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not open the Home Launch Plan.');
+    }
+  }, []);
+
   // ── Property management ───────────────────────────────────────────────────
 
   const handleDeleteProperty = useCallback(async (id: string) => {
@@ -403,10 +430,33 @@ function App() {
     brandKitIntroDecidedRef.current = false;
   }, [signOut]);
 
+  // Development-only visual fixtures. They render the real V85 components
+  // without a backend so we can inspect the client-facing composition before
+  // the isolated Supabase environment is deployed. They are stripped from
+  // production builds by Vite's import.meta.env.DEV replacement.
+  if (import.meta.env.DEV) {
+    const fixture = new URLSearchParams(window.location.search).get('preview');
+    const fixtureTasks = [
+      { category: 'fix' as const, title: 'Repair the loose kitchen cupboard handle', why_it_matters: 'A small visible repair helps the kitchen photograph cleanly and avoids a first-impression distraction.', mandatory: true, requires_upload: false, requires_review: true, due_date: '2026-08-29' },
+      { category: 'prepare' as const, title: 'Clear kitchen and bathroom counters', why_it_matters: 'Clear surfaces help rooms feel brighter, larger, and ready for photography.', mandatory: true, requires_upload: false, requires_review: true, due_date: '2026-08-30' },
+      { category: 'proof' as const, title: 'Upload the recent boiler service certificate', why_it_matters: 'Your agent can review the document before preparing property information.', mandatory: false, requires_upload: true, requires_review: true, due_date: null },
+    ];
+    const fixtureProperty = { id: 'visual-fixture-property', address: '27 Willow Lane, Bristol' } as Property;
+    if (fixture === 'agent') return <HomeLaunchPlan property={fixtureProperty} agentId="visual-fixture-agent" onBack={() => undefined} previewTasks={fixtureTasks} />;
+    if (fixture === 'seller') return <SellerPortalPreview data={{ address: fixtureProperty.address, agent_intro: 'I have put together a simple plan to help your home look its best before it goes live. Complete what you can, and tell me where you need help.', launch_target_date: '2026-09-02', tasks: fixtureTasks.map((task, index) => ({ ...task, id: `fixture-${index}`, plan_id: 'fixture-plan', agent_id: 'fixture-agent', display_order: index, seller_status: 'not_started' as const, seller_completion_date: null, seller_note: null, agent_review_status: 'pending' as const })) }} />;
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   // Auth still loading — show a spinner
   if (authLoading) return <PageLoader />;
+
+  // Public Seller Link: no agent session is exposed; the portal obtains only
+  // its client-safe payload from the token-gated edge function.
+  const sellerToken = window.location.pathname.match(/^\/seller\/([^/]+)\/?$/)?.[1];
+  if (sellerToken) return <SellerPortal token={sellerToken} />;
+  const buyerToken = window.location.pathname.match(/^\/buyer\/([^/]+)\/?$/)?.[1];
+  if (buyerToken) return <BuyerPortal token={buyerToken} />;
 
   // Not authenticated — show landing page + optional auth modal overlay
   if (!user) {
@@ -439,6 +489,7 @@ function App() {
           loading={propsLoading || deleting !== null}
           loadError={propsError}
           onStartNew={handleStartSession}
+          onStartBuyerSearch={() => setView('buyer-workspace')}
           onViewProperty={handleViewProperty}
           onViewAllProjects={() => setView('all-projects')}
           onDeleteProperty={handleDeleteProperty}
@@ -472,6 +523,18 @@ function App() {
         />
       )}
 
+      {view === 'launch-plan' && launchProperty && (
+        <HomeLaunchPlan
+          property={launchProperty}
+          agentId={user.id}
+          onBack={() => { setLaunchProperty(null); setView('home'); refresh(); }}
+        />
+      )}
+
+      {view === 'buyer-workspace' && (
+        <BuyerWorkspace agentId={user.id} onBack={() => setView('home')} />
+      )}
+
       {/* Workflow */}
       {view === 'workflow' && session && (
         <WorkflowShell
@@ -481,11 +544,11 @@ function App() {
           isModalOpen={isDocModalOpen}
         >
           {session.stage === 'walkthrough' && session.propertyId && (
-              <TextWalkthroughStage
-                address={session.address}
-                onComplete={handleTextComplete}
-                onCancel={handleExitWorkflow}
-              />
+            <TextWalkthroughStage
+              address={session.address}
+              onComplete={handleTextComplete}
+              onCancel={handleExitWorkflow}
+            />
           )}
 
           {session.stage === 'outputs' && (
@@ -532,6 +595,7 @@ function App() {
               pipelineResult={session.pipelineResult}
               isReopening={session.isReopening}
               onComplete={handleGenerationComplete}
+              onOpenLaunchPlan={handleOpenLaunchPlan}
               onModalChange={setIsDocModalOpen}
               onRetry={() =>
                 setSession((prev: SessionState | null) => prev ? { ...prev, stage: 'walkthrough' } : prev)

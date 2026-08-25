@@ -895,12 +895,22 @@ function buildOfferSummary(data: Record<string, unknown>, address: string): Docu
     children.push(blank(160));
   }
 
-  children.push(factGrid([
+  const offerTerms = [
     { label: "Offer Price",  value: price },
     { label: "Deposit",      value: deposit },
     { label: "Closing Date", value: closing },
-  ]));
-  children.push(blank(120));
+  ];
+
+  // An Offer Summary can be selected for a normal walkthrough even when no
+  // offer terms were discussed. Passing an empty row set into docx's Table
+  // builder can fail during packing, which previously made the otherwise
+  // valid document look like a storage failure. Omit the visual term strip
+  // when there are no terms; the summary and disclaimer still produce a
+  // useful, correctly stored working document.
+  if (offerTerms.some((term) => term.value && term.value !== "not mentioned")) {
+    children.push(factGrid(offerTerms));
+    children.push(blank(120));
+  }
 
   if (financing || deadline) {
     children.push(labelValue("Financing", financing));
